@@ -22,20 +22,34 @@ div[data-baseweb="select"] {font-size: 1rem;}
 </style>
 """, unsafe_allow_html=True)
 
-ATP_URL = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2026.csv"
-WTA_URL = "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2026.csv"
+# Use the GitHub Contents API instead of raw.githubusercontent.com.
+# This avoids the 404 issue that can occur from Streamlit's runtime fetching
+# the raw CSV URL.
+GITHUB_API = {
+    "ATP": "https://api.github.com/repos/JeffSackmann/tennis_atp/contents/atp_matches_2026.csv?ref=master",
+    "WTA": "https://api.github.com/repos/JeffSackmann/tennis_wta/contents/wta_matches_2026.csv?ref=master",
+}
 
 @st.cache_data(ttl=21600, show_spinner="Loading tennis database…")
 def load_matches(tour):
-    url = ATP_URL if tour == "ATP" else WTA_URL
+    url = GITHUB_API[tour]
     try:
-        r = requests.get(url, timeout=30)
+        r = requests.get(url, timeout=30, headers={"Accept": "application/vnd.github+json"})
         r.raise_for_status()
-        df = pd.read_csv(StringIO(r.text))
-        df["date"] = pd.to_datetime(df["tourney_date"].astype(str), format="%Y%m%d", errors="coerce")
+        payload = r.json()
+
+        # GitHub returns the file as base64 through the Contents API.
+        import base64
+        content = base64.b64decode(payload["content"]).decode("utf-8")
+        df = pd.read_csv(StringIO(content))
+        df["date"] = pd.to_datetime(
+            df["tourney_date"].astype(str), format="%Y%m%d", errors="coerce"
+        )
         return df
     except Exception as e:
-        st.error(f"Could not load {tour} data: {e}")
+        st.error(
+            f"Could not load {tour} data. The tennis database request failed: {e}"
+        )
         return pd.DataFrame()
 
 def player_matches(df, player, surface="All"):
@@ -53,7 +67,7 @@ def player_matches(df, player, surface="All"):
     w["first_won"] = w["w_1stWon"]
     w["second_won"] = w["w_2ndWon"]
     w["sv_gms"] = w["w_SvGms"]
-    w["bp_won"] = w["w_bpWon"]
+    w["bp_won"] = np.nan
     w["bp_saved"] = w["w_bpSaved"]
     w["bp_faced"] = w["w_bpFaced"]
 
@@ -69,7 +83,7 @@ def player_matches(df, player, surface="All"):
     l["first_won"] = l["l_1stWon"]
     l["second_won"] = l["l_2ndWon"]
     l["sv_gms"] = l["l_SvGms"]
-    l["bp_won"] = l["l_bpWon"]
+    l["bp_won"] = np.nan
     l["bp_saved"] = l["l_bpSaved"]
     l["bp_faced"] = l["l_bpFaced"]
 

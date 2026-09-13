@@ -156,20 +156,104 @@ def fmt_num(x):
     return "N/A" if pd.isna(x) else f"{x:.2f}"
 
 st.title("🎾 Tennis Betting Lab")
-st.caption("2026 database • matchup intelligence • Kalshi edge scanner")
+st.caption("2026 ATP/WTA Tour + Challenger database • matchup intelligence • Kalshi edge scanner")
 
-tour = st.selectbox("Tour", ["ATP", "WTA"])
+tour_filter = st.selectbox("Tour", ["All", "ATP", "WTA"])
 surface = st.selectbox("Surface", ["All", "Hard", "Clay", "Grass", "Carpet"])
 
-df = load_matches(tour)
+atp_df = load_matches("ATP")
+wta_df = load_matches("WTA")
+
+if tour_filter == "ATP":
+    df = atp_df
+elif tour_filter == "WTA":
+    df = wta_df
+else:
+    df = pd.concat([atp_df, wta_df], ignore_index=True)
+
 if df.empty:
     st.stop()
 
-players = sorted(set(df.home_name.dropna()) | set(df.away_name.dropna()))
-p1 = st.selectbox("Player 1", players)
-p2 = st.selectbox("Player 2", [p for p in players if p != p1])
+# Universal directory from every player appearing in the supplied 2026 files.
+def build_player_directory(atp, wta):
+    frames = []
+    for tour_name, d in [("ATP", atp), ("WTA", wta)]:
+        if d.empty:
+            continue
+        names = pd.concat(
+            [d["home_name"], d["away_name"]], ignore_index=True
+        ).dropna().astype(str)
+        frames.append(pd.DataFrame({"player": names, "tour": tour_name}))
+    if not frames:
+        return pd.DataFrame(columns=["player", "tour"])
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates()
+        .sort_values(["tour", "player"])
+        .reset_index(drop=True)
+    )
+
+directory = build_player_directory(atp_df, wta_df)
+if tour_filter != "All":
+    directory = directory[directory["tour"].eq(tour_filter)].copy()
+
+st.caption(
+    f"Player directory: {len(directory):,} players • "
+    f"2026 ATP Tour/Challenger + WTA Tour/Challenger data"
+)
+
+search = st.text_input(
+    "Search any player",
+    placeholder="Type a surname: Rybakina, Sabalenka, Alcaraz, Sinner…",
+).strip().lower()
+
+if search:
+    candidates = directory[
+        directory["player"].str.lower().str.contains(search, na=False)
+    ].copy()
+else:
+    candidates = directory.copy()
+
+if candidates.empty:
+    st.warning(
+        f"No {tour_filter} player found for '{search}'. "
+        "Try the surname only."
+    )
+    st.stop()
+
+candidate_labels = [
+    f"{r.player} — {r.tour}" for r in candidates.itertuples(index=False)
+]
+p1_label = st.selectbox("Player 1", candidate_labels, key="p1_universal")
+p1_name, p1_tour = p1_label.rsplit(" — ", 1)
+
+remaining = candidates[
+    ~((candidates["player"].eq(p1_name)) & (candidates["tour"].eq(p1_tour)))
+].copy()
+
+if remaining.empty:
+    st.warning("Search for another player to create a matchup.")
+    st.stop()
+
+p2_labels = [
+    f"{r.player} — {r.tour}" for r in remaining.itertuples(index=False)
+]
+p2_label = st.selectbox("Player 2", p2_labels, key="p2_universal")
+p2_name, p2_tour = p2_label.rsplit(" — ", 1)
+
+if p1_tour != p2_tour:
+    st.error(
+        "Player 1 and Player 2 must be from the same tour. "
+        "Select two ATP players or two WTA players."
+    )
+
+p1, p2 = p1_name, p2_name
 
 if st.button("ANALYZE MATCHUP", type="primary"):
+    if not p1 or not p2:
+        st.error("Select two players first.")
+        st.stop()
+
     p1p, p2p, s1, s2 = model(df, p1, p2, surface)
     hh = h2h(df, p1, p2, surface)
     r1 = player_matches(df, p1, surface).head(10)
